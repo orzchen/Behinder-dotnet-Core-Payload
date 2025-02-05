@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AssemblyName>$(ProjectName)</AssemblyName>
+        <EmitDebugInformation>false</EmitDebugInformation>
+        <SignAssembly>false</SignAssembly>
+        <DebugType>none</DebugType>
+        <EmitDebugInformation>false</EmitDebugInformation>
+        <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+        <AssemblyIdentityName>false</AssemblyIdentityName>
+        <GenerateResource>false</GenerateResource>
+        <OutputPath>$(SolutionDir)bin\$(Configuration)\$(ProjectName)\</OutputPath>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.2.0"/>
+        <PackageReference Include="Oracle.ManagedDataAccess" Version="23.7.0"/>
+    </ItemGroup>
+</Project>

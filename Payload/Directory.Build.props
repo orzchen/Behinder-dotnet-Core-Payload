@@ -1,0 +1,8 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <!-- 统一设置所有子项目的目标框架 -->
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- 可以设置统一的版本号 -->
+    <Version>0.0.0</Version>
+  </PropertyGroup>
+</Project>

