@@ -2,7 +2,7 @@
 .net core implementation of Behinder Payload
 
 - **Behinder**：冰蝎二开项目
-- **MemShell**：内存马实现
+- **MemShell**：[内存马实现](https://github.com/orzchen/Behinder-dotnet-Core-Payload/blob/main/dotnet%20Core%E4%B8%8B%E7%9A%84%E5%86%85%E5%AD%98%E9%A9%AC.md)
 - **Payload**：冰蝎Payload在.Net Core上的实现
 
 1. 使用VS 2022或者Rider编译Payload
